@@ -17,6 +17,8 @@
 HOMEWIZARD_IP="192.168.1.2"
 HOMEWIZARD_PW="yourpass"
 PROFILEDIR="/home/user/.homewizard"
+CACHETIME=10				# how long to cache the values in [s]
+SIGINT=2
 
 # Functions --------------------------------------------------------------------
 
@@ -48,6 +50,7 @@ gethumidity()
 # Output     :  logging
 #
 {
+  update_cache
   echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
 }
 
@@ -62,6 +65,7 @@ getstatus()
 # Output     :  logging
 #
 {
+  update_cache
   echo `cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
@@ -76,6 +80,7 @@ gettemperature()
 # Output     :  logging
 #
 {
+  update_cache
   echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
 }
 
@@ -90,9 +95,7 @@ switch2id()
 # Return     :  <id>
 #
 {
-  if [ ! -r "$PROFILEDIR/homewizard.json" ]; then
-    update_cache
-  fi
+  update_cache
   ID=`cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
   if [ -z "$ID" ] ; then
     echo -e "ID of Switch '$1' not found. Exiting..."
@@ -134,6 +137,12 @@ update_cache()
   if [ ! -d "$PROFILEDIR" ]; then
     mkdir -p "$PROFILEDIR"
   fi
+  if [ -f "$PROFILEDIR/homewizard.json" ]; then
+    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard.json") ))
+    if [ "$lastmodified" -lt "$CACHETIME" ]; then
+      return
+    fi
+  fi
   wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > $PROFILEDIR/homewizard.json
 }
 
@@ -171,7 +180,7 @@ return 0
 # ------------------------------------------------------------------------------
 
 # trap keyboard interrupt (control-c)
-trap control_c SIGINT
+trap control_c $SIGINT
 
 
 # When you need an argument that needs a value, you put the ":" right after 
