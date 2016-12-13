@@ -17,7 +17,7 @@
 HOMEWIZARD_IP="192.168.1.2"
 HOMEWIZARD_PW="yourpass"
 PROFILEDIR="/home/user/.homewizard"
-CACHETIME=10				# how long to cache the values in [s]
+CACHETIME=10                            # how long to cache the values in [s]
 SIGINT=2
 
 # Functions --------------------------------------------------------------------
@@ -50,7 +50,7 @@ gethumidity()
 # Output     :  logging
 #
 {
-  update_cache
+  $0 -u
   echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
 }
 
@@ -65,7 +65,7 @@ getstatus()
 # Output     :  logging
 #
 {
-  update_cache
+  $0 -u
   echo `cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
@@ -80,7 +80,7 @@ gettemperature()
 # Output     :  logging
 #
 {
-  update_cache
+  $0 -u
   echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
 }
 
@@ -95,7 +95,6 @@ switch2id()
 # Return     :  <id>
 #
 {
-  update_cache
   ID=`cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
   if [ -z "$ID" ] ; then
     echo -e "ID of Switch '$1' not found. Exiting..."
@@ -119,8 +118,7 @@ switch()
 {
   SWITCH=`switch2id $1`
   wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/sw/$SWITCH/$2
-  sleep 1
-  update_cache
+  $0 -u
 }
 
 # ------------------------------------------------------------------------------
@@ -141,9 +139,18 @@ update_cache()
     lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard.json") ))
     if [ "$lastmodified" -lt "$CACHETIME" ]; then
       return
+    else
+      if [ -f "$PROFILEDIR/update.lock" ]; then
+        rm "$PROFILEDIR/update.lock"
+      fi
     fi
   fi
-  wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > $PROFILEDIR/homewizard.json
+  if [ ! -f "$PROFILEDIR/update.lock" ]; then
+    touch "$PROFILEDIR/update.lock"
+    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard.json
+    mv /tmp/homewizard.json $PROFILEDIR/homewizard.json
+    rm "$PROFILEDIR/update.lock"
+  fi
 }
 
 # ------------------------------------------------------------------------------
