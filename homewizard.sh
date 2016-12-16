@@ -20,6 +20,12 @@ PROFILEDIR="/home/user/.homewizard"
 CACHETIME=10                            # how long to cache the values in [s]
 SIGINT=2
 
+# get all informations from homewizard:
+# GET /yourpass/enlist
+# GET /yourpass/get-sensors
+# GET /yourpass/suntimes
+# GET /yourpass/get-status
+
 # Functions --------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
@@ -51,11 +57,75 @@ gethumidity()
 #
 {
   $0 -u
-  echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
+  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
+}
+
+
+# ------------------------------------------------------------------------------
+presetname()
+# ------------------------------------------------------------------------------
+#
+# Description:  return the name of the active preset (0-3)
+#
+# Parameter  :  none
+#
+# Output     :  logging
+#
+{
+  case $1 in
+  0)
+    echo "home"
+    ;;
+  1)
+    echo "away"
+    ;;
+  2)
+    echo "sleep"
+    ;;
+  3)
+    echo "holiday"
+    ;;
+  esac
 }
 
 # ------------------------------------------------------------------------------
-getstatus()
+getpreset()
+# ------------------------------------------------------------------------------
+#
+# Description:  return the active preset (0-3)
+#
+# Parameter  :  none
+#
+# Output     :  logging
+#
+{
+  $0 -u
+  preset=`cat $PROFILEDIR/homewizard-status.json | jq '.preset'`
+  echo `presetname $preset`
+}
+
+# ------------------------------------------------------------------------------
+setpreset()
+# ------------------------------------------------------------------------------
+#
+# Description:  set a preset
+#
+# Parameter  :  preset, one of [0,1,2,3]
+#               0 = home
+#               1 = away
+#               2 = sleep
+#               3 = holiday
+#
+# Output     :  logging
+#
+{
+  wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/preset/$1
+  echo `presetname $1`
+  $0 -u
+}
+
+# ------------------------------------------------------------------------------
+getsensors()
 # ------------------------------------------------------------------------------
 #
 # Description:  return the state of a device
@@ -66,7 +136,7 @@ getstatus()
 #
 {
   $0 -u
-  echo `cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
+  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
 # ------------------------------------------------------------------------------
@@ -81,7 +151,7 @@ gettemperature()
 #
 {
   $0 -u
-  echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
+  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
 }
 
 # ------------------------------------------------------------------------------
@@ -95,7 +165,7 @@ switch2id()
 # Return     :  <id>
 #
 {
-  ID=`cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
+  ID=`cat $PROFILEDIR/homewizard-sensors.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
   if [ -z "$ID" ] ; then
     echo -e "ID of Switch '$1' not found. Exiting..."
     exit 1
@@ -135,8 +205,8 @@ update_cache()
   if [ ! -d "$PROFILEDIR" ]; then
     mkdir -p "$PROFILEDIR"
   fi
-  if [ -f "$PROFILEDIR/homewizard.json" ]; then
-    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard.json") ))
+  if [ -f "$PROFILEDIR/homewizard-sensors.json" ]; then
+    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard-sensors.json") ))
     if [ "$lastmodified" -lt "$CACHETIME" ]; then
       return
     else
@@ -147,8 +217,10 @@ update_cache()
   fi
   if [ ! -f "$PROFILEDIR/update.lock" ]; then
     touch "$PROFILEDIR/update.lock"
-    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard.json
-    mv /tmp/homewizard.json $PROFILEDIR/homewizard.json
+    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard-sensors.json
+    mv /tmp/homewizard-sensors.json $PROFILEDIR/homewizard-sensors.json
+    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-status | jq '.response' > /tmp/homewizard-status.json
+    mv /tmp/homewizard-status.json $PROFILEDIR/homewizard-status.json
     rm "$PROFILEDIR/update.lock"
   fi
 }
@@ -169,7 +241,17 @@ cat << EOF
 usage: $(basename $0) -d <switchdevice> -s <on/off>
 
 OPTIONS:
-  -l    list all  function
+  -d    <device>
+  -g    get status of a sensor/device, needs option -d too
+  -h    get humidity of a sensor, needs option -d too
+  -t    get temperature of a sensor, needs option -d too
+  -p    needs options: keyword or number: 0,1,2,3 or ?
+        0 or home
+        1 or away
+        2 or sleep
+        3 or holiday
+        for options 0-3 it sets the preset to 0-3
+        for option ? it returns the current set preset
   -u    update all caches
 
 examples:
@@ -196,17 +278,20 @@ trap control_c $SIGINT
 #
 # please keep letters in alphabetic order
 #
-while getopts ":d:ghs:tu" OPTION
+while getopts ":d:ghp:s:tu" OPTION
 do
   case $OPTION in
     d)
       GETOPTS_DEVICE="$OPTARG"
       ;;
     g)
-      GETOPTS_GETSTATUS=1
+      GETOPTS_GETSENSORS=1
       ;;
     h)
       GETOPTS_HUMIDITY=1
+      ;;
+    p)
+      GETOPTS_PRESET="$OPTARG"
       ;;
     s)
       GETOPTS_SWITCH="$OPTARG"
@@ -237,12 +322,36 @@ if [ ! -z $GETOPTS_SWITCH ] ; then
   fi
 fi
 
-if [ ! -z $GETOPTS_GETSTATUS ] ; then
+if [ ! -z $GETOPTS_PRESET ] ; then
+  case $GETOPTS_PRESET in
+   home|0)
+     setpreset 0
+     ;;
+   away|1)
+     setpreset 1
+     ;;
+   sleep|2)
+     setpreset 2
+     ;;
+   holiday|3)
+     setpreset 3
+     ;;
+   ?)
+     getpreset
+     ;;
+   *)
+     echo -e "Arguments for Option -p are: 0,1,2,3,?"
+     exit 1
+     ;;
+  esac
+fi
+
+if [ ! -z $GETOPTS_GETSENSORS ] ; then
   if [ -z $GETOPTS_DEVICE ] ; then
     echo -e "Option -g needs Option -d too"
     exit 1
   else
-    getstatus $GETOPTS_DEVICE $GETOPTS_SWITCH
+    getsensors $GETOPTS_DEVICE $GETOPTS_SWITCH
   fi
 fi
 
