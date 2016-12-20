@@ -14,11 +14,18 @@
 # You should have received a copy of the GNU General Public License               
 # along with hwwr.  If not, see <http://www.gnu.org/licenses/>.
 
-HOMEWIZARD_IP="192.168.1.2"
-HOMEWIZARD_PW="yourpass"
-PROFILEDIR="/home/user/.homewizard"
+# Constants --------------------------------------------------------------------
+#
+# you may overwrite all this constants in 
+#   ~/.homewizard/homewizardrc 
+
+#HOMEWIZARD_IP="192.168.1.99"
+#HOMEWIZARD_PW="yourpass"
+PROFILEDIR="$HOME/.homewizard"
+PROFILE="$PROFILEDIR/homewizardrc"
 CACHETIME=10                            # how long to cache the values in [s]
 SIGINT=2
+DEBUG=0
 
 # get all informations from homewizard:
 # GET /yourpass/enlist
@@ -56,7 +63,7 @@ gethumidity()
 # Output     :  logging
 #
 {
-  $0 -u
+  update_cache
   echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
 }
 
@@ -83,7 +90,8 @@ presetname()
     echo "sleep"
     ;;
   3)
-    echo "holiday"
+    #echo "holiday"
+    echo "guest"            # the author is using 'holiday'-mode as 'guest'-mode
     ;;
   esac
 }
@@ -99,7 +107,7 @@ getpreset()
 # Output     :  logging
 #
 {
-  $0 -u
+  update_cache
   preset=`cat $PROFILEDIR/homewizard-status.json | jq '.preset'`
   echo `presetname $preset`
 }
@@ -114,14 +122,28 @@ setpreset()
 #               0 = home
 #               1 = away
 #               2 = sleep
-#               3 = holiday
+#               3 = holiday (or in my personal case: guest)
 #
 # Output     :  logging
 #
 {
+  case $1 in
+  home)
+    newpreset=0
+    ;;
+  away)
+    newpreset=1
+    ;;
+  sleep)
+    newpreset=2
+    ;;
+  holiday|guest)           # the author is using 'holiday'-mode as 'guest'-mode
+    newpreset=3
+    ;;
+  esac
   wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/preset/$1
   echo `presetname $1`
-  $0 -u
+  update_cache
 }
 
 # ------------------------------------------------------------------------------
@@ -135,7 +157,7 @@ getsensors()
 # Output     :  logging
 #
 {
-  $0 -u
+  update_cache
   echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
@@ -150,7 +172,7 @@ gettemperature()
 # Output     :  logging
 #
 {
-  $0 -u
+  update_cache
   echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
 }
 
@@ -188,7 +210,7 @@ switch()
 {
   SWITCH=`switch2id $1`
   wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/sw/$SWITCH/$2
-  $0 -u
+  update_cache
 }
 
 # ------------------------------------------------------------------------------
@@ -202,9 +224,6 @@ update_cache()
 # Output     :  none
 #
 {
-  if [ ! -d "$PROFILEDIR" ]; then
-    mkdir -p "$PROFILEDIR"
-  fi
   if [ -f "$PROFILEDIR/homewizard-sensors.json" ]; then
     lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard-sensors.json") ))
     if [ "$lastmodified" -lt "$CACHETIME" ]; then
@@ -217,11 +236,18 @@ update_cache()
   fi
   if [ ! -f "$PROFILEDIR/update.lock" ]; then
     touch "$PROFILEDIR/update.lock"
-    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard-sensors.json
-    mv /tmp/homewizard-sensors.json $PROFILEDIR/homewizard-sensors.json
-    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-status | jq '.response' > /tmp/homewizard-status.json
-    mv /tmp/homewizard-status.json $PROFILEDIR/homewizard-status.json
-    rm "$PROFILEDIR/update.lock"
+    PID=`date +%N`
+    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard-sensors.json-$PID
+    if [ -f /tmp/homewizard-sensors.json-$PID ]; then
+      mv /tmp/homewizard-sensors.json-$PID $PROFILEDIR/homewizard-sensors.json
+    fi
+    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-status | jq '.response' > /tmp/homewizard-status.json-$PID
+    if [ -f /tmp/homewizard-status.json-$PID ]; then
+      mv /tmp/homewizard-status.json-$PID $PROFILEDIR/homewizard-status.json
+    fi
+    if [ -f "$PROFILEDIR/update.lock" ]; then
+      rm "$PROFILEDIR/update.lock"
+    fi
   fi
 }
 
@@ -249,7 +275,7 @@ OPTIONS:
         0 or home
         1 or away
         2 or sleep
-        3 or holiday
+        3 or holiday/guest
         for options 0-3 it sets the preset to 0-3
         for option ? it returns the current set preset
   -u    update all caches
@@ -271,6 +297,21 @@ return 0
 # trap keyboard interrupt (control-c)
 trap control_c $SIGINT
 
+if [ ! -d "$PROFILEDIR" ]; then
+  mkdir -p "$PROFILEDIR"
+fi
+
+# load configuration
+if [ -f "$PROFILE" ]; then
+  . "$PROFILE"
+else
+  if [ ! -z "$HOMEWIZARD_IP" ] || [ ! -z "$HOMEWIZARD_PW" ]; then
+    echo "Error:" 
+    echo "'HOMEWIZARD_IP' and 'HOMEWIZARD_PW' have to be set either in the "
+    echo "header of $0 or in $PROFILE"
+    exit 1
+  fi
+fi
 
 # When you need an argument that needs a value, you put the ":" right after 
 # the argument in the optstring. If your var is just a flag, withou any 
@@ -333,7 +374,7 @@ if [ ! -z $GETOPTS_PRESET ] ; then
    sleep|2)
      setpreset 2
      ;;
-   holiday|3)
+   holiday|guest|3)  # the author is using 'holiday'-mode as 'guest'-mode
      setpreset 3
      ;;
    ?)
