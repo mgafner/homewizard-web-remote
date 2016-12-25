@@ -1,3 +1,4 @@
+#!/bin/bash
 # This file is part of homewizard-web-remote (hwwr)                                                    
 # https://github.com/mgafner/homewizard-web-remote                                            
 #                                                                                
@@ -63,8 +64,8 @@ gethumidity()
 # Output     :  logging
 #
 {
-  update_cache
-  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
+  update_cache_check
+  echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .hu'`
 }
 
 
@@ -107,8 +108,8 @@ getpreset()
 # Output     :  logging
 #
 {
-  update_cache
-  preset=`cat $PROFILEDIR/homewizard-status.json | jq '.preset'`
+  update_cache_check
+  preset=`cat $PROFILEDIR/homewizard.json | jq '.preset'`
   echo `presetname $preset`
 }
 
@@ -143,7 +144,7 @@ setpreset()
   esac
   wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/preset/$1
   echo `presetname $1`
-  update_cache
+  update_cache_check
 }
 
 # ------------------------------------------------------------------------------
@@ -157,8 +158,8 @@ getsensors()
 # Output     :  logging
 #
 {
-  update_cache
-  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
+  update_cache_check
+  echo `cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
 # ------------------------------------------------------------------------------
@@ -172,8 +173,8 @@ gettemperature()
 # Output     :  logging
 #
 {
-  update_cache
-  echo `cat $PROFILEDIR/homewizard-sensors.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
+  update_cache_check
+  echo `cat $PROFILEDIR/homewizard.json | jq '.thermometers | .[] | select(.name=='\"$1\"') | .te'`
 }
 
 # ------------------------------------------------------------------------------
@@ -187,7 +188,7 @@ switch2id()
 # Return     :  <id>
 #
 {
-  ID=`cat $PROFILEDIR/homewizard-sensors.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
+  ID=`cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .id'`
   if [ -z "$ID" ] ; then
     echo -e "ID of Switch '$1' not found. Exiting..."
     exit 1
@@ -210,7 +211,52 @@ switch()
 {
   SWITCH=`switch2id $1`
   wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/sw/$SWITCH/$2
-  update_cache
+  update_cache_check
+}
+
+# ------------------------------------------------------------------------------
+update_cache_check()
+# ------------------------------------------------------------------------------
+#
+# Description:  writes a json file of all switches of the homewizard
+# 
+# Parameter  :  none
+#
+# Output     :  none
+#
+{
+  # if we ask for immediate update or if no cache file exist (i.e. first start)
+  # then update immediately
+  if [ "$1" == "now" ] || [ ! -f "$PROFILEDIR/homewizard.json" ] ; then
+    update_immediate="true"
+  else
+    update_immediate="false"
+  fi
+
+  # if the cache file is older than predefined cache-time we want to update too
+  if [ -f "$PROFILEDIR/homewizard.json" ]; then
+    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard.json") ))
+    if [ "$lastmodified" -gt "$CACHETIME" ]; then
+      update="true"
+    else
+      update="false"
+    fi
+  fi
+  
+  # found an old locking file, set to update and remove the file
+  if [ -f "$PROFILEDIR/update.lock" ]; then
+    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/update.lock") ))
+    if [ "$lastmodified" -gt "$CACHETIME" ]; then
+      update="true"
+      rm "$PROFILEDIR/update.lock"
+    else
+      update="false"
+    fi
+  fi
+
+  if [ "$update_immediate" == "true" ] || [ "$update" == "true" ]; then
+    $0 -x &
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -224,30 +270,14 @@ update_cache()
 # Output     :  none
 #
 {
-  if [ -f "$PROFILEDIR/homewizard-sensors.json" ]; then
-    lastmodified=$(( $(date +%s) - $(stat -c %Y "$PROFILEDIR/homewizard-sensors.json") ))
-    if [ "$lastmodified" -lt "$CACHETIME" ]; then
-      return
-    else
-      if [ -f "$PROFILEDIR/update.lock" ]; then
-        rm "$PROFILEDIR/update.lock"
-      fi
-    fi
+  touch "$PROFILEDIR/update.lock"
+  PID=`date +%N`
+  wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard.json-$PID
+  if [ -f /tmp/homewizard.json-$PID ]; then
+    mv /tmp/homewizard.json-$PID $PROFILEDIR/homewizard.json
   fi
-  if [ ! -f "$PROFILEDIR/update.lock" ]; then
-    touch "$PROFILEDIR/update.lock"
-    PID=`date +%N`
-    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard-sensors.json-$PID
-    if [ -f /tmp/homewizard-sensors.json-$PID ]; then
-      mv /tmp/homewizard-sensors.json-$PID $PROFILEDIR/homewizard-sensors.json
-    fi
-    wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-status | jq '.response' > /tmp/homewizard-status.json-$PID
-    if [ -f /tmp/homewizard-status.json-$PID ]; then
-      mv /tmp/homewizard-status.json-$PID $PROFILEDIR/homewizard-status.json
-    fi
-    if [ -f "$PROFILEDIR/update.lock" ]; then
-      rm "$PROFILEDIR/update.lock"
-    fi
+  if [ -f "$PROFILEDIR/update.lock" ]; then
+    rm "$PROFILEDIR/update.lock"
   fi
 }
 
@@ -319,7 +349,7 @@ fi
 #
 # please keep letters in alphabetic order
 #
-while getopts ":d:ghp:s:tu" OPTION
+while getopts ":d:ghp:s:tux" OPTION
 do
   case $OPTION in
     d)
@@ -341,6 +371,11 @@ do
       GETOPTS_TEMPERATURE=1
       ;;
     u)
+      update_cache_check
+      ;;
+    x)
+      # update immediately without checks
+      # using for calling myself to update in background
       update_cache
       ;;
     \?)
