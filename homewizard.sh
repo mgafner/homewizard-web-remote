@@ -150,7 +150,7 @@ setpreset()
 }
 
 # ------------------------------------------------------------------------------
-getsensors()
+getswitchstate()
 # ------------------------------------------------------------------------------
 #
 # Description:  return the state of a device
@@ -161,7 +161,7 @@ getsensors()
 #
 {
   update_cache_check
-  echo `cat $PROFILEDIR/homewizard.json | jq '.switches | .[] | select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
+  echo `cat $PROFILEDIR/switches.json | jq 'select(.name=='\"$1\"') | .status' | sed 's/\"//g'`
 }
 
 # ------------------------------------------------------------------------------
@@ -212,8 +212,11 @@ switch()
 #
 {
   SWITCH=`switch2id $1`
-  wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/sw/$SWITCH/$2
-  update_cache_check
+  wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/sw/$SWITCH/$2 &
+  cat $PROFILEDIR/switches.json | jq --arg name $1 --arg state $2 \
+    'if .name == $name then .status = $state else . end' \
+    > $PROFILEDIR/switches.json-$PID
+  mv $PROFILEDIR/switches.json-$PID $PROFILEDIR/switches.json
 }
 
 # ------------------------------------------------------------------------------
@@ -276,6 +279,7 @@ update_cache()
   wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard.json-$PID
   if [ -f /tmp/homewizard.json-$PID ]; then
     mv /tmp/homewizard.json-$PID $PROFILEDIR/homewizard.json
+    cat $PROFILEDIR/homewizard.json | jq '.switches | .[]' > $PROFILEDIR/switches.json
   fi
   if [ -f "$PROFILEDIR/update.lock" ]; then
     rm "$PROFILEDIR/update.lock"
@@ -430,7 +434,7 @@ if [ ! -z $GETOPTS_GETSENSORS ] ; then
     echo -e "Option -g needs Option -d too"
     exit 1
   else
-    getsensors $GETOPTS_DEVICE $GETOPTS_SWITCH
+    getswitchstate $GETOPTS_DEVICE $GETOPTS_SWITCH
   fi
 fi
 
