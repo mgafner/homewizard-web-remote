@@ -129,22 +129,24 @@ setpreset()
 #
 {
   case $1 in
-  home)
+  0|home)
     newpreset=0
     ;;
-  away)
+  1|away)
     newpreset=1
     ;;
-  sleep)
+  2|sleep)
     newpreset=2
     ;;
-  holiday|guest)           # the author is using 'holiday'-mode as 'guest'-mode
+  3|holiday|guest)           # the author is using 'holiday'-mode as 'guest'-mode
     newpreset=3
     ;;
   esac
-  wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/preset/$1
-  echo `presetname $1`
-  update_cache_check
+  wget -O /dev/null -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/preset/$newpreset
+  cat $PROFILEDIR/homewizard.json | jq '.preset = '\"$newpreset\"'' > \
+    $PROFILEDIR/homewizard.json-$PID
+  mv $PROFILEDIR/homewizard.json-$PID $PROFILEDIR/homewizard.json
+  echo `presetname $newpreset`
 }
 
 # ------------------------------------------------------------------------------
@@ -271,7 +273,6 @@ update_cache()
 #
 {
   touch "$PROFILEDIR/update.lock"
-  PID=`date +%N`
   wget -O - -q http://$HOMEWIZARD_IP/$HOMEWIZARD_PW/get-sensors | jq '.response' > /tmp/homewizard.json-$PID
   if [ -f /tmp/homewizard.json-$PID ]; then
     mv /tmp/homewizard.json-$PID $PROFILEDIR/homewizard.json
@@ -326,6 +327,8 @@ return 0
 
 # trap keyboard interrupt (control-c)
 trap control_c $SIGINT
+
+PID=`date +%N`
 
 if [ ! -d "$PROFILEDIR" ]; then
   mkdir -p "$PROFILEDIR"
